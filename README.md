@@ -55,7 +55,14 @@ image from every one):
 | NativeReader2, fit and Huffman decoding in C | 1.9 s | 1.7 s |
 
 Most of what's left is the fit (about 1.5 s); the Huffman decoding is under
-0.2 s. The three channels' Huffman coding, one after another, went from 1.38 s
+0.2 s, and now runs alongside the fit (each channel's thread decodes its own
+deltas, then rebuilds it, so the first channel starts while the others are
+still decoding). On a machine with more cores, each channel's fit is also
+shared among several helper threads (PairBench shows the parts with one
+helper and with as many as the machine gets). On 16 cores (Windows,
+scrubjay, 1 band) that took NativeReader2's decoding from 664 to 461 ms,
+against NativeReader's 717; its encode is 391 ms against 942, and its
+decode check 106 against 398. The three channels' Huffman coding, one after another, went from 1.38 s
 in Java to 0.29 s in C, and their decoding from 0.65 s to 0.29 s.
 
 Save prints its timeline (when each channel's fit and coding ended). With
@@ -67,7 +74,7 @@ channel's coding, each a serial loop: more bands is the way to go faster.
 | Folder | Eclipse project | What it is |
 |---|---|---|
 | java/src | NativeEncoder (Java) | NativeWriter, NativeReader and the mappers (the default package); src/test: the regression test's tools, test.Drive and test.Decode (package test) |
-| java/bench | | the Java halves of the benchmarks (RowFitBench, CoderBench, DecoderBench; the default package: they use DeltaMapper's package-private classes) |
+| java/bench | | the Java halves of the benchmarks (RowFitBench, CoderBench, DecoderBench, PairBench; the default package: they use DeltaMapper's package-private classes) |
 | java/run_tests.sh, .bat | | the regression test |
 | java/launch | | shared run configurations (they appear under Run and External Tools) |
 | native | NativeEncoder_C (C, CDT; on Linux, after native/eclipse-linux.sh) | the C versions (DeltaMapper.c, .h, ArithmeticMapper.c, .h, StringMapper.c, .h, CodeMapper.c, .h), their JNI side (DeltaMapper_jni.c), the C halves of the benchmarks (bench_RowFit.c), the Makefile |
@@ -86,7 +93,7 @@ channel's coding, each a serial loop: more bands is the way to go faster.
 | native/DeltaMapper.c, .h (3) | ... and the reader's decoding: DeltaMapper_decodeRowFitChannels (MixedModels_decode, _earlierRows; each channel's decoder and helper threads, as RowWave), the same deltas and values as getValuesFromRowFitChannels |
 | native/DeltaMapper.c, .h (4) | ... and the reader's last steps: DeltaMapper_getPixels (getBlueGreenRed, ResizeMapper.resize2 and getPixel in one pass, on threads), the same image as the Java |
 | native/DeltaMapper.c, .h (5) | ... and the writer's Apply (DeltaMapper_applyQuantize, _applyPreview) and decode check (DeltaMapper_checkMixedDeltas) |
-| native/DeltaMapper.c, .h (6) | ... and NativeReader2's fit: DeltaMapper_rebuildRowFitChannels (the decoder's threads with the deltas given, nothing decoded), the same values as getValuesFromRowFitDeltas |
+| native/DeltaMapper.c, .h (6) | ... and NativeReader2's fit: DeltaMapper_rebuildRowFitChannels (the decoder's threads with the deltas given, nothing decoded, or each channel's deltas Huffman decoded in its own thread first), the same values as getValuesFromRowFitDeltas. In NativeReader2 each channel's fit can be shared among several helper threads, or solved by the channel's own thread with none (DeltaMapper.fitHelpers: 0 to 4, from the cores and the bands, so that the bands' threads don't crowd the cores), with the same result; NativeReader keeps one, since its decoder, not the fit, sets its pace |
 | native/StringMapper.c, .h | StringMapper's unary strings in C for the Huffman pair: StringMapper_getStringList (getHistogram, getRankTable, packStrings, compressStrings), _decompressStrings, _unpackStrings; the bit-pair transforms run a byte at a time through tables made from the Java's rules: the same bits |
 | native/CodeMapper.c, .h | CodeMapper's canonical Huffman code in C: CodeMapper_packRegularCode, _unpackRegularCode (the code lengths come from the Java's getRegularHuffmanLength) |
 | native/ArithmeticMapper.c, .h | ArithmeticMapper's range coder in C (RangeEncoder_init, _encode, _finish; RangeDecoder_init, _target, _decode) |
@@ -179,6 +186,7 @@ shared from java/launch:
 | RowFitBench | asks for an image; times RowFit's fit in Java and, if the library is built, in C through JNI (as NativeWriter runs it), and writes native/rowfit.dump |
 | bench_RowFit (Windows / Linux), bench_RowFit_native (...) | the C half: reads native/rowfit.dump, checks every prediction against the Java's, and times the same way |
 | DecoderBench | asks for an image; codes it as Save does, then times the reader's decoding (all three channels at once) in Java and in C through JNI, checking the deltas and values are the same |
+| PairBench | asks for an image; codes it as Save does with both pairs, in 1 and 4 bands, and times each writer's encode (with its decode check) and each reader's decoding (best of 5), then the decoding's parts in 1 band: NativeReader's decoder and fit, NativeReader2's Huffman decoding, and its fit rebuild |
 | CoderBench | asks for an image; makes its deltas as Save does, then times the mixed coder in Java (packMixedDeltasJava) and in C through JNI, checking the bytes are the same |
 
 The Java launches give the JVM `--enable-native-access=ALL-UNNAMED`, which
