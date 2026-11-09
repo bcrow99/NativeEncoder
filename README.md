@@ -30,7 +30,9 @@ HuffmanWriter and HuffmanReader (Huffman format 'H' 1, the same files) with
 the same native methods where they apply: the writer's fit and Apply, and
 the reader's fit (the C decoder's machinery with the deltas given:
 DeltaMapper.getValuesFromRowFitDeltas) and last steps. Their Huffman coding
-and decoding are still Java.
+and decoding are C too (StringMapper's unary strings and bit-pair transform,
+CodeMapper's canonical code, in native/StringMapper.c and CodeMapper.c);
+only the code lengths and their small Deflate'd table are Java.
 
 On scrubjay.jpg (3518 x 2697, Save's defaults, 16 cores, Windows), with the
 same file and the same decoded image either way:
@@ -50,9 +52,11 @@ image from every one):
 | NativeReader (C decoder and fit) | 2.9 s | 2.7 s |
 | NativeReader2, fit in Java | 3.3 s | 3.0 s |
 | NativeReader2, fit in C | 2.2 s | 1.8 s |
+| NativeReader2, fit and Huffman decoding in C | 1.9 s | 1.7 s |
 
-Of NativeReader2's 2.2 s, the fit is about 1.5 s and the Huffman decoding
-about 0.45 s.
+Most of what's left is the fit (about 1.5 s); the Huffman decoding is under
+0.2 s. The three channels' Huffman coding, one after another, went from 1.38 s
+in Java to 0.29 s in C, and their decoding from 0.65 s to 0.29 s.
 
 Save prints its timeline (when each channel's fit and coding ended). With
 one band it's the three fits (run at the same time) and then the last
@@ -66,25 +70,27 @@ channel's coding, each a serial loop: more bands is the way to go faster.
 | java/bench | | the Java halves of the benchmarks (RowFitBench, CoderBench, DecoderBench; the default package: they use DeltaMapper's package-private classes) |
 | java/run_tests.sh, .bat | | the regression test |
 | java/launch | | shared run configurations (they appear under Run and External Tools) |
-| native | NativeEncoder_C (C, CDT; on Linux, after native/eclipse-linux.sh) | the C versions (DeltaMapper.c, .h, ArithmeticMapper.c, .h), their JNI side (DeltaMapper_jni.c), the C halves of the benchmarks (bench_RowFit.c), the Makefile |
+| native | NativeEncoder_C (C, CDT; on Linux, after native/eclipse-linux.sh) | the C versions (DeltaMapper.c, .h, ArithmeticMapper.c, .h, StringMapper.c, .h, CodeMapper.c, .h), their JNI side (DeltaMapper_jni.c), the C halves of the benchmarks (bench_RowFit.c), the Makefile |
 
 | File | What it is |
 |---|---|
 | java/src/NativeWriter.java | the writer (SimpleWriter2 1.1) |
 | java/src/NativeReader.java | the reader (SimpleReader2 1.1) |
-| java/src/NativeWriter2.java, NativeReader2.java | NativeWriter and NativeReader with Huffman coding in place of the mixed context coding: the same fit and deltas, then StringMapper's unary strings (its bit-pair transform kept if it saves enough) and CodeMapper's canonical Huffman code over the strings' bytes, per channel and band; their own format ('H' 1). Less compression (on the test photos 9-29% bigger files), faster to decode. The reader's fit is C (the C decoder's, with the deltas given), as are the writer's fit and Apply and the reader's last steps; the Huffman coding and decoding are Java so far |
+| java/src/NativeWriter2.java, NativeReader2.java | NativeWriter and NativeReader with Huffman coding in place of the mixed context coding: the same fit and deltas, then StringMapper's unary strings (its bit-pair transform kept if it saves enough) and CodeMapper's canonical Huffman code over the strings' bytes, per channel and band; their own format ('H' 1). Less compression (on the test photos 9-29% bigger files), faster to decode. In C, as NativeWriter's and NativeReader's are: the writer's fit and Apply, the reader's fit (the C decoder's, with the deltas given) and last steps, and the Huffman coding and decoding (all but the code lengths) |
 | java/src/DeltaMapper.java | the channels, the least-squares fit from the rows above (RowFit, RowWave), the mixed context coding (MixedModels): DeltaEncoder's DeltaMapper trimmed to what these programs use |
 | java/src/ArithmeticMapper.java | the range coder (RangeEncoder, RangeDecoder, Arriving): DeltaEncoder's ArithmeticMapper, trimmed the same way |
 | java/src/ResizeMapper.java, ViewerSupport.java | resizing (resize2); the windows, dialogs and parallel helpers |
-| java/src/CodeMapper.java, StringMapper.java, SegmentMapper.java | DeltaEncoder's, whole (not used by these programs now, kept to translate to C as well) |
+| java/src/CodeMapper.java, StringMapper.java, SegmentMapper.java | DeltaEncoder's, whole: NativeWriter2 and NativeReader2 use CodeMapper's and StringMapper's Huffman coding (the Java when the library isn't there); SegmentMapper isn't used |
 | native/DeltaMapper.c, .h | DeltaMapper's methods in C, under the same names (so far RowFit: RowFit_init, _start, _moveTo, _addColumns, _solveRow, _solvePoints, _predict, _plane) |
 | native/DeltaMapper.c, .h (2) | ... and the mixed context coder: DeltaMapper_packMixedDeltas (MixedModels_init, _contexts, _contextsRow, _update, _encode), the same bytes as packMixedDeltas |
 | native/DeltaMapper.c, .h (3) | ... and the reader's decoding: DeltaMapper_decodeRowFitChannels (MixedModels_decode, _earlierRows; each channel's decoder and helper threads, as RowWave), the same deltas and values as getValuesFromRowFitChannels |
 | native/DeltaMapper.c, .h (4) | ... and the reader's last steps: DeltaMapper_getPixels (getBlueGreenRed, ResizeMapper.resize2 and getPixel in one pass, on threads), the same image as the Java |
 | native/DeltaMapper.c, .h (5) | ... and the writer's Apply (DeltaMapper_applyQuantize, _applyPreview) and decode check (DeltaMapper_checkMixedDeltas) |
 | native/DeltaMapper.c, .h (6) | ... and NativeReader2's fit: DeltaMapper_rebuildRowFitChannels (the decoder's threads with the deltas given, nothing decoded), the same values as getValuesFromRowFitDeltas |
+| native/StringMapper.c, .h | StringMapper's unary strings in C for the Huffman pair: StringMapper_getStringList (getHistogram, getRankTable, packStrings, compressStrings), _decompressStrings, _unpackStrings; the bit-pair transforms run a byte at a time through tables made from the Java's rules: the same bits |
+| native/CodeMapper.c, .h | CodeMapper's canonical Huffman code in C: CodeMapper_packRegularCode, _unpackRegularCode (the code lengths come from the Java's getRegularHuffmanLength) |
 | native/ArithmeticMapper.c, .h | ArithmeticMapper's range coder in C (RangeEncoder_init, _encode, _finish; RangeDecoder_init, _target, _decode) |
-| native/DeltaMapper_jni.c | the native methods DeltaMapper.java declares (rowFitPlane, packMixedDeltasNative, decodeRowFitChannelsNative, getPixelsNative, applyQuantizeNative, applyPreviewNative, checkMixedDeltasNative, rebuildRowFitChannelsNative), built with DeltaMapper.c and ArithmeticMapper.c into the library DeltaMapper |
+| native/DeltaMapper_jni.c | the native methods DeltaMapper.java declares (rowFitPlane, packMixedDeltasNative, decodeRowFitChannelsNative, getPixelsNative, applyQuantizeNative, applyPreviewNative, checkMixedDeltasNative, rebuildRowFitChannelsNative) and NativeWriter2 declares (stringListNative, packRegularCodeNative, huffmanDecodeNative), built with DeltaMapper.c, ArithmeticMapper.c, StringMapper.c and CodeMapper.c into the library DeltaMapper |
 
 ## Setting up Eclipse (Windows and Linux)
 
