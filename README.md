@@ -34,6 +34,23 @@ and decoding are C too (StringMapper's unary strings and bit-pair transform,
 CodeMapper's canonical code, in native/StringMapper.c and CodeMapper.c);
 only the code lengths and their small Deflate'd table are Java.
 
+NativeSimpleWriter's Delta menu does the same for the Simple pair: Avg
+writes Simple 2 format 3 (format 2 with the delta type), read by
+NativeSimpleReader (the C decodes it as it decodes the fit's, with the
+average in place of the fit). On scrubjay Avg codes in 1.12 s against 1.56 s
+(4 bands: 0.85 s against 1.70 s) and decodes in 1.2-1.4 s against 2.3-3.1
+s, for files 7% bigger (4,352,656 bytes against 4,075,255): the mixed
+context coding, which both share, is most of the time.
+
+NativeHuffmanWriter's Delta menu chooses its deltas: LS, the least-squares
+fit (the default, the same files as before), or Avg, the classic average
+filter (each pixel from (left + above) / 2, each channel on its own). Avg
+writes Huffman format 2 (format 1 with the delta type in the header), which
+NativeHuffmanReader reads and DeltaEncoder's HuffmanReader doesn't. On
+scrubjay (2 cores) Avg codes in 0.27 s against LS's 0.94 s and decodes in
+0.30-0.36 s against 1.1 s, for files 7% bigger (4,765,333 bytes against
+4,453,703).
+
 NativePacketWriter and NativePacketReader are the Packet pair: DeltaEncoder's
 PacketWriter and PacketReader (Packet format 'P' 3 and 5, the same files),
 with every menu: Pixel and Color Resolution, the 14 delta types, the 8
@@ -100,7 +117,7 @@ channel's coding, each a serial loop: more bands is the way to go faster.
 |---|---|
 | java/src/NativeSimpleWriter.java | the writer (SimpleWriter2 1.1) |
 | java/src/NativeSimpleReader.java | the reader (SimpleReader2 1.1) |
-| java/src/NativeHuffmanWriter.java, NativeHuffmanReader.java | NativeSimpleWriter and NativeSimpleReader with Huffman coding in place of the mixed context coding: the same fit and deltas, then StringMapper's unary strings (its bit-pair transform kept if it saves enough) and CodeMapper's canonical Huffman code over the strings' bytes, per channel and band; their own format ('H' 1). Less compression (on the test photos 9-29% bigger files), faster to decode. In C, as NativeSimpleWriter's and NativeSimpleReader's are: the writer's fit and Apply, the reader's fit (the C decoder's, with the deltas given) and last steps, and the Huffman coding and decoding (all but the code lengths) |
+| java/src/NativeHuffmanWriter.java, NativeHuffmanReader.java | NativeSimpleWriter and NativeSimpleReader with Huffman coding in place of the mixed context coding: the same fit and deltas, then StringMapper's unary strings (its bit-pair transform kept if it saves enough) and CodeMapper's canonical Huffman code over the strings' bytes, per channel and band; their own format ('H' 1; 'H' 2 with the Delta menu's Avg, the average filter in place of the fit). Less compression (on the test photos 9-29% bigger files), faster to decode. In C, as NativeSimpleWriter's and NativeSimpleReader's are: the writer's fit and Apply, the reader's fit (the C decoder's, with the deltas given) and last steps, and the Huffman coding and decoding (all but the code lengths) |
 | java/src/NativePacketWriter.java, NativePacketReader.java | DeltaEncoder's PacketWriter and PacketReader (2.2; Packet format 'P'), with the segmentation, the reader's deltas and its last steps in C. The reader's native methods are the writer's (segmentNative, packSegmentsNative, restoreNative, restoreDeltasNative) |
 | java/src/DeltaMapper.java | the channels, the deltas of every type, the least-squares fit from the rows above (RowFit, RowWave), the mixed context coding (MixedModels): DeltaEncoder's DeltaMapper, whole, with the native methods' declarations and the Java they stand in for |
 | java/src/ArithmeticMapper.java | the arithmetic and range coders (RangeEncoder, RangeDecoder, Arriving): DeltaEncoder's ArithmeticMapper, whole, plus Arriving.awaitAll |
@@ -108,7 +125,7 @@ channel's coding, each a serial loop: more bands is the way to go faster.
 | java/src/CodeMapper.java, StringMapper.java, SegmentMapper.java | DeltaEncoder's, whole: the Huffman pair uses CodeMapper's and StringMapper's Huffman coding, the Packet pair all three (the Java when the library isn't there) |
 | native/DeltaMapper.c, .h | DeltaMapper's methods in C, under the same names (so far RowFit: RowFit_init, _start, _moveTo, _addColumns, _solveRow, _solvePoints, _predict, _plane) |
 | native/DeltaMapper.c, .h (2) | ... and the mixed context coder: DeltaMapper_packMixedDeltas (MixedModels_init, _contexts, _contextsRow, _update, _encode), the same bytes as packMixedDeltas |
-| native/DeltaMapper.c, .h (3) | ... and the reader's decoding: DeltaMapper_decodeRowFitChannels (MixedModels_decode, _earlierRows; each channel's decoder and helper threads, as RowWave), the same deltas and values as getValuesFromRowFitChannels |
+| native/DeltaMapper.c, .h (3) | ... and the reader's decoding: DeltaMapper_decodeRowFitChannels (MixedModels_decode, _earlierRows; each channel's decoder and helper threads, as RowWave), the same deltas and values as getValuesFromRowFitChannels; DeltaMapper_decodeAverageChannels, the same for the average deltas (getValuesFromAverageChannels: each channel's decoder thread, with the average of left and above in place of the fit) |
 | native/DeltaMapper.c, .h (4) | ... and the reader's last steps: DeltaMapper_getPixels (getBlueGreenRed, ResizeMapper.resize2 or resize, and getPixel in one pass, on threads), the same image as the Java. resize's maps come from DeltaMapper.resizeMap, which runs ResizeMapper.resizeX and resizeY on a line of known values |
 | native/DeltaMapper.c, .h (5) | ... and the writer's Apply (DeltaMapper_applyQuantize, _applyPreview) and decode check (DeltaMapper_checkMixedDeltas) |
 | native/DeltaMapper.c, .h (6) | ... and NativeHuffmanReader's fit: DeltaMapper_rebuildRowFitChannels (the decoder's threads with the deltas given, nothing decoded, or each channel's deltas Huffman decoded in its own thread first), the same values as getValuesFromRowFitDeltas. In NativeHuffmanReader each channel's fit can be shared among several helper threads, or solved by the channel's own thread with none (DeltaMapper.fitHelpers: 0 to 4, from the cores and the bands, so that the bands' threads don't crowd the cores), with the same result; NativeSimpleReader keeps one, since its decoder, not the fit, sets its pace |
@@ -116,7 +133,7 @@ channel's coding, each a serial loop: more bands is the way to go faster.
 | native/SegmentMapper.c, .h | SegmentMapper's segmentation in C for the Packet pair: SegmentMapper_getSegmentedData3 (segment, merge3 with its compressing on threads, combine3), _packSegments3, and _restore (unpackSegments3 and restore2, decompressing on threads): the same segments, bytes and strings |
 | native/CodeMapper.c, .h | CodeMapper's canonical Huffman code in C: CodeMapper_packRegularCode, _unpackRegularCode (the code lengths come from the Java's getRegularHuffmanLength) |
 | native/ArithmeticMapper.c, .h | ArithmeticMapper's range coder in C (RangeEncoder_init, _encode, _finish; RangeDecoder_init, _target, _decode) |
-| native/DeltaMapper_jni.c | the native methods DeltaMapper.java declares (rowFitPlane, packMixedDeltasNative, decodeRowFitChannelsNative, getPixelsNative, applyQuantizeNative, applyPreviewNative, checkMixedDeltasNative, rebuildRowFitChannelsNative), NativeHuffmanWriter declares (stringListNative, packRegularCodeNative, huffmanDecodeNative, rebuildHuffmanChannelsNative) and NativePacketWriter declares (segmentNative, packSegmentsNative, restoreNative, restoreDeltasNative), built with DeltaMapper.c, ArithmeticMapper.c, StringMapper.c, CodeMapper.c and SegmentMapper.c into the library DeltaMapper |
+| native/DeltaMapper_jni.c | the native methods DeltaMapper.java declares (rowFitPlane, packMixedDeltasNative, decodeRowFitChannelsNative, decodeAverageChannelsNative, getPixelsNative, applyQuantizeNative, applyPreviewNative, checkMixedDeltasNative, rebuildRowFitChannelsNative), NativeHuffmanWriter declares (stringListNative, packRegularCodeNative, huffmanDecodeNative, rebuildHuffmanChannelsNative) and NativePacketWriter declares (segmentNative, packSegmentsNative, restoreNative, restoreDeltasNative), built with DeltaMapper.c, ArithmeticMapper.c, StringMapper.c, CodeMapper.c and SegmentMapper.c into the library DeltaMapper |
 
 ## Setting up Eclipse (Windows and Linux)
 
@@ -240,14 +257,15 @@ java/run_tests.sh bluejay.jpg      # Linux (needs xvfb-run)
 ```
 
 It writes the image in 1 and 4 bands with NativeSimpleWriter (test.Drive), in
-1 band with the Java fit and coder (`-Dnative=false`), in 1 and 4 bands
-with NativeHuffmanWriter, and with NativePacketWriter at its defaults and
+1 band with the Java fit and coder (`-Dnative=false`), in 4 bands with its
+Avg deltas, in 1 and 4 bands
+with NativeHuffmanWriter and in 4 bands with its Avg deltas, and with NativePacketWriter at its defaults and
 with the block map (delta_type=13), decodes them (test.Decode, with the
 reader for the file's format), and checks the sizes and the decoded
 image's MD5 for the images it knows (bcrow99/TestImages): bluejay.jpg
-(61,174 and 62,689 bytes; Huffman 69,095 and 70,893; Packet 76,209 and
-68,830) and scrubjay.jpg (4,075,255 and 4,080,169 bytes; Huffman 4,453,703
-and 4,454,159; Packet 4,855,085 and 4,465,954); for others it prints them.
+(61,174 and 62,689 bytes, Avg 67,743; Huffman 69,095 and 70,893, Avg 76,031; Packet
+76,209 and 68,830) and scrubjay.jpg (4,075,255 and 4,080,169 bytes, Avg 4,356,507; Huffman
+4,453,703 and 4,454,159, Avg 4,765,744; Packet 4,855,085 and 4,465,954); for others it prints them.
 The Packet files decode to another image, as PacketWriter resizes
 differently. Each line ends with how long decoding took (a second time, after a warm-up)
 and what the writer used, C or Java (the decoder uses the same). Leave
