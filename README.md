@@ -59,11 +59,34 @@ contexts start again: on scrubjay, 33 bands (the most its 2,159 rows allow)
 against 1 cost 1.25% with Mixed context and LS (4,126,314 bytes), 0.9% with
 Avg, and 0.24% with Huffman.
 
+Many bands suit the average deltas, whose bands the reader decodes all at
+once. With LS each band carries its fits (about 2.5 MB a channel on a wide
+image), so the reader decodes LS bands one for each 6 processors at a time
+(NativeReader.bandsAtOnce): with all of a 64-band LS file's bands at once,
+decoding was up to 3 times slower than in 1 band on a Ryzen 7 5700G (16
+threads, Windows), and a quarter slower on 4 cores (Linux). For a reader with
+two threads a core, LS decoding is fastest with one a core (start /affinity
+or taskset): the fits fill the caches the two share.
+
+Where the time goes besides the coding (measured with Java's Flight
+Recorder on a 7036 x 5394 frame): the C library keeps its large blocks for
+reuse (native/BlockPool.c); the bands are coded and decoded at their place
+in the channels, not copied out and back; the C writes the pixels straight
+into the image, in one pass; and the LS writer refits the bands' first rows
+all at once. Together, on the Ryzen with 16 threads, Huffman Avg went from
+1.04 to 0.69 s (encode and decode) and Mixed Avg from 1.79 to 1.31 s. The
+Huffman reader also decodes and rebuilds each Avg band in one C step
+(NativeWriter.huffmanAverage; native version 16).
+
 With the mixed context coding the coder, which both share, is most of the
 time. Its C decoder was sped up (about 12% on one core: the earlier
 channels' context rows from running row sums, the inside pixels' contexts
 without the edge tests, MED and the interval's bottom without branches), the
-same bytes and values.
+same bytes and values. Since then: the coder's divisions are multiplications
+by reciprocals (exactly the same results), the model count is a constant in
+each version of the coder, and an interior pixel's contexts take the terms
+from the rows above from a pass over the row made before it
+(MixedModels_rowAbove): about 6% more off the Avg decoding on one core.
 
 NativePacketWriter and NativePacketReader are the Packet pair: DeltaEncoder's
 PacketWriter and PacketReader (Packet format 'P' 3 and 5, the same files),
@@ -122,10 +145,10 @@ channel's coding, each a serial loop: more bands is the way to go faster.
 | Folder | Eclipse project | What it is |
 |---|---|---|
 | java/src | NativeEncoder (Java) | the native writers and readers and the mappers (the default package); src/test: the regression test's tools, test.Drive and test.Decode (package test) |
-| java/bench | | the Java halves of the benchmarks (RowFitBench, CoderBench, DecoderBench, PairBench; the default package: they use DeltaMapper's package-private classes) |
+| java/bench | | the Java halves of the benchmarks (RowFitBench, CoderBench, DecoderBench, PairBench, ScaleBench; the default package: they use DeltaMapper's package-private classes) |
 | java/run_tests.sh, .bat | | the regression test |
 | java/launch | | shared run configurations (they appear under Run and External Tools) |
-| native | NativeEncoder_C (C, CDT; on Linux, after native/eclipse-linux.sh) | the C versions (DeltaMapper.c, .h, ArithmeticMapper.c, .h, StringMapper.c, .h, CodeMapper.c, .h, SegmentMapper.c, .h), their JNI side (DeltaMapper_jni.c), the C halves of the benchmarks (bench_RowFit.c), the Makefile |
+| native | NativeEncoder_C (C, CDT; on Linux, after native/eclipse-linux.sh) | the C versions (DeltaMapper.c, .h, ArithmeticMapper.c, .h, StringMapper.c, .h, CodeMapper.c, .h, SegmentMapper.c, .h, BlockPool.c, .h), their JNI side (DeltaMapper_jni.c), the C halves of the benchmarks (bench_RowFit.c), the Makefile |
 
 | File | What it is |
 |---|---|
@@ -146,7 +169,8 @@ channel's coding, each a serial loop: more bands is the way to go faster.
 | native/SegmentMapper.c, .h | SegmentMapper's segmentation in C for the Packet pair: SegmentMapper_getSegmentedData3 (segment, merge3 with its compressing on threads, combine3), _packSegments3, and _restore (unpackSegments3 and restore2, decompressing on threads): the same segments, bytes and strings |
 | native/CodeMapper.c, .h | CodeMapper's canonical Huffman code in C: CodeMapper_packRegularCode, _unpackRegularCode (the code lengths come from the Java's getRegularHuffmanLength) |
 | native/ArithmeticMapper.c, .h | ArithmeticMapper's range coder in C (RangeEncoder_init, _encode, _finish; RangeDecoder_init, _target, _decode) |
-| native/DeltaMapper_jni.c | the native methods DeltaMapper.java declares (rowFitPlane, packMixedDeltasNative, decodeRowFitChannelsNative, decodeAverageChannelsNative, getPixelsNative, applyQuantizeNative, applyPreviewNative, checkMixedDeltasNative, rebuildRowFitChannelsNative), NativeWriter declares (stringListNative, packRegularCodeNative, huffmanDecodeNative, rebuildHuffmanChannelsNative) and NativePacketWriter declares (segmentNative, packSegmentsNative, restoreNative, restoreDeltasNative), built with DeltaMapper.c, ArithmeticMapper.c, StringMapper.c, CodeMapper.c and SegmentMapper.c into the library DeltaMapper |
+| native/BlockPool.c, .h | the library's memory, kept for reuse: every C file includes BlockPool.h last, which makes its malloc, calloc, realloc and free the pool's; freed blocks of 1 MB or more are kept (up to a quarter of the memory, at most 2 GB) and handed out again, so a program that keeps running doesn't get fresh memory, page by page from the system, for every frame |
+| native/DeltaMapper_jni.c | the native methods DeltaMapper.java declares (rowFitPlane, packMixedDeltasNative, decodeRowFitChannelsNative, decodeAverageChannelsNative, getPixelsNative, applyQuantizeNative, applyPreviewNative, checkMixedDeltasNative, rebuildRowFitChannelsNative), NativeWriter declares (stringListNative, packRegularCodeNative, huffmanDecodeNative, rebuildHuffmanChannelsNative) and NativePacketWriter declares (segmentNative, packSegmentsNative, restoreNative, restoreDeltasNative), built with DeltaMapper.c, ArithmeticMapper.c, StringMapper.c, CodeMapper.c, SegmentMapper.c and BlockPool.c into the library DeltaMapper |
 
 ## Setting up Eclipse (Windows and Linux)
 
@@ -240,13 +264,14 @@ shared from java/launch:
 
 | Launch | What it does |
 |---|---|
-| NativeWriter | asks for an image; File > Save writes `foo` in the java folder (with the C fit if native has the library), coded as the Delta and Entropy menus say. From a command line, every writer takes the file to save to after the image (`java NativeWriter image.jpg out.bin`); without one, Save writes `foo` |
+| NativeWriter | asks for an image; File > Save writes `foo` in the java folder (with the C fit if native has the library), coded as the Delta and Entropy menus say, and checked by decoding it back if File > Decode Check is on (it's off unless switched on: the check takes about as long as decoding the file, and a file that doesn't decode right is found by its reader instead; then, with the check on, Save says whether the writer or the reader is at fault). From a command line, every writer takes the file to save to after the image (`java NativeWriter image.jpg out.bin`); without one, Save writes `foo` |
 | NativeReader | asks for a file (e.g. that `foo`): Simple 2 or Huffman, LS or Avg |
 | NativePacketWriter, NativePacketReader | the same for the Packet pair (Save writes `foo` too, and says "Native methods: C (...)" or Java) |
 | RowFitBench | asks for an image; times RowFit's fit in Java and, if the library is built, in C through JNI (as NativeWriter runs it), and writes native/rowfit.dump |
 | bench_RowFit (Windows / Linux), bench_RowFit_native (...) | the C half: reads native/rowfit.dump, checks every prediction against the Java's, and times the same way |
 | DecoderBench | asks for an image; codes it as Save does, then times the reader's decoding (all three channels at once) in Java and in C through JNI, checking the deltas and values are the same |
 | PairBench | asks for an image; codes it as Save does with both codings (LS deltas), in 1 and 4 bands, and times each one's encode (with its decode check) and its decoding (best of 5), then the decoding's parts in 1 band: the mixed context decoder and fit, the Huffman decoding, and its fit rebuild |
+| ScaleBench | asks for an image; tiles it 2 x 2 and times each coding (mixed context and Huffman, LS and Avg deltas) in 1, 2, 4 ... 64 bands, encode and decode, with the file's size (see native/run_scale below) |
 | CoderBench | asks for an image; makes its deltas as Save does, then times the mixed coder in Java (packMixedDeltasJava) and in C through JNI, checking the bytes are the same |
 
 The Java launches give the JVM `--enable-native-access=ALL-UNNAMED`, which
@@ -260,6 +285,26 @@ From a command prompt, `native\run_bench.bat image` (or
 `native/run_bench.sh image`) builds the C, runs all of them and writes
 native/bench_results.txt. On Windows it takes JAVA_HOME from the `java`
 command if it isn't set.
+
+How the speed grows with cores: `native\run_scale.bat image` (or
+`native/run_scale.sh image`) builds the C and runs ScaleBench. It tiles the
+image 2 x 2 (mirrored copies; scrubjay.jpg at Save's Pixel Resolution 4 is
+then coded 5630 x 4316, enough for 64 bands) and times each coding (mixed
+context and Huffman, LS and Avg deltas) in 1, 2, 4 ... 64 bands: encode
+(without its decode check), decode, and the file's size. It runs once on all
+the logical processors and, on a machine with two a core, again on one a
+core (taskset on Linux, start /affinity on Windows), then on one processor
+in 1 and 4 bands (the single-core times). The writer and reader make their
+threads for the processors Java sees, which each section shows. It first
+records the processor, cores, threads, clock and memory, and writes it all
+to native/scale_results_<machine>.txt. Optional arguments: the tiling, Pixel
+Resolution, Color Resolution and timed runs (default 2 4 3 2). The Java heap
+is half the memory, taken and touched at the start (-Xms, AlwaysPreTouch), as
+a program that keeps running would have it; a 2 x 2 scrubjay needs about 3 GB
+(tile 1 if there's less). Other Java options can be given in JAVA_OPTS (e.g.
+-XX:+UseParallelGC; it made no difference). The runs on fewer processors tell
+Java how many it has (-XX:ActiveProcessorCount), as it doesn't always see an
+affinity limit.
 
 ## Test
 
