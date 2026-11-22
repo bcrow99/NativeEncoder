@@ -19,9 +19,12 @@ The writer has two menus for how Save codes the image:
   NeighbourMapper).
 
 With LS, the files are exactly SimpleWriter2's (Simple 2 format 2) and
-HuffmanWriter's (Huffman format 1), so they go back and forth between the two
-repositories. With Avg they're Simple 2 format 3 and Huffman format 2 (the
-same with the delta type in the header), which only NativeReader reads.
+HuffmanWriter's (Huffman format 3), so they go back and forth between the two
+repositories. With Avg they're Simple 2 format 3 and Huffman format 4 (the
+same with the delta type in the header). Huffman formats 3 and 4 code the
+code lengths compactly (NeighbourMapper.packLengths), with no Deflate, so the
+files don't depend on a zlib; the formats before them, 1 and 2, had the code
+lengths Deflated, and are still read.
 NativeReader reads them all, by the file's first byte, and DeltaEncoder's
 GenericWriter and GenericReader write and read the same files. Any native method must
 leave the files and the decoded images byte for byte the same.
@@ -31,7 +34,7 @@ context aware coder (DeltaMapper.packMixedDeltas) and decode check, and its
 Apply (quantizing, the candidate channels, the preview); the Huffman coding
 and decoding (StringMapper's unary strings and bit-pair transform,
 CodeMapper's canonical code, in native/StringMapper.c and CodeMapper.c; only
-the code lengths and their small Deflate'd table are Java); the reader's
+the code lengths and their small table are Java); the reader's
 context aware decoding (DeltaMapper.getValuesFromRowFitChannels and
 getValuesFromAverageChannels: the decoder and the fit, row by row), its fit
 for Huffman files (the decoder's machinery with the deltas given:
