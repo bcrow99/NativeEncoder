@@ -10,23 +10,29 @@ The writer has two menus for how Save codes the image:
 
 - **Delta**: LS, the least-squares fit from the rows above (the default), or
   Avg, the classic average filter (each pixel from (left + above) / 2).
-- **Entropy**: Mixed context (the default), the Simple 2 format ('F'), or
-  Huffman, the Huffman format ('H').
+- **Entropy**: Context aware (the default), the Simple 2 format ('F'), or
+  Huffman on the unary strings, the Huffman format ('H'); or Neighbour
+  Huffman on the deltas themselves, DeltaEncoder's HuffmanWriter2 coding:
+  Huffman tables chosen by each delta's neighbours, with a run mode and pairs
+  in the quiet parts ('N', the same files as HuffmanWriter2; coded and
+  decoded in C with the library, NeighbourMapper.c, else in Java,
+  NeighbourMapper).
 
 With LS, the files are exactly SimpleWriter2's (Simple 2 format 2) and
 HuffmanWriter's (Huffman format 1), so they go back and forth between the two
 repositories. With Avg they're Simple 2 format 3 and Huffman format 2 (the
 same with the delta type in the header), which only NativeReader reads.
-NativeReader reads all four, by the file's first byte. Any native method must
+NativeReader reads them all, by the file's first byte, and DeltaEncoder's
+GenericWriter and GenericReader write and read the same files. Any native method must
 leave the files and the decoded images byte for byte the same.
 
 In C so far: the writer's least-squares fit (DeltaMapper.RowFit.plane), its
-mixed context coder (DeltaMapper.packMixedDeltas) and decode check, and its
+context aware coder (DeltaMapper.packMixedDeltas) and decode check, and its
 Apply (quantizing, the candidate channels, the preview); the Huffman coding
 and decoding (StringMapper's unary strings and bit-pair transform,
 CodeMapper's canonical code, in native/StringMapper.c and CodeMapper.c; only
 the code lengths and their small Deflate'd table are Java); the reader's
-mixed context decoding (DeltaMapper.getValuesFromRowFitChannels and
+context aware decoding (DeltaMapper.getValuesFromRowFitChannels and
 getValuesFromAverageChannels: the decoder and the fit, row by row), its fit
 for Huffman files (the decoder's machinery with the deltas given:
 DeltaMapper.getValuesFromRowFitDeltas), and its last steps (adding the
@@ -45,7 +51,7 @@ On scrubjay (2 cores):
 
 | | LS | Avg |
 |---|---|---|
-| Mixed context: file | 4,075,255 bytes | 4,352,656 bytes |
+| Context aware: file | 4,075,255 bytes | 4,352,656 bytes |
 | encode (1 band; 4 bands) | 1.56 s; 1.58 s | 1.12 s; 0.80 s |
 | decode | 2.1-3.0 s | 1.0-1.25 s |
 | Huffman: file | 4,453,703 bytes | 4,765,333 bytes |
@@ -56,7 +62,7 @@ The Bands menu goes up to 64 bands (each band at least 64 rows of the
 quantized image), so a reader can keep about 96 cores busy on a big image:
 three channel threads a band. Each band costs a little, as its fit and
 contexts start again: on scrubjay, 33 bands (the most its 2,159 rows allow)
-against 1 cost 1.25% with Mixed context and LS (4,126,314 bytes), 0.9% with
+against 1 cost 1.25% with Context aware and LS (4,126,314 bytes), 0.9% with
 Avg, and 0.24% with Huffman.
 
 Many bands suit the average deltas, whose bands the reader decodes all at
@@ -76,9 +82,9 @@ into the image, in one pass; and the LS writer refits the bands' first rows
 all at once. Together, on the Ryzen with 16 threads, Huffman Avg went from
 1.04 to 0.69 s (encode and decode) and Mixed Avg from 1.79 to 1.31 s. The
 Huffman reader also decodes and rebuilds each Avg band in one C step
-(NativeWriter.huffmanAverage; native version 16).
+(NativeWriter.huffmanAverage; native version 16). Version 17 added the neighbour Huffman decoding in C (native/NeighbourMapper.c), version 18 its coding.
 
-With the mixed context coding the coder, which both share, is most of the
+With the context aware coding the coder, which both share, is most of the
 time. Its C decoder was sped up (about 12% on one core: the earlier
 channels' context rows from running row sums, the inside pixels' contexts
 without the edge tests, MED and the interval's bottom without branches), the
@@ -120,7 +126,7 @@ image from every one):
 
 | | 1 band | 4 bands |
 |---|---|---|
-| Mixed context (C decoder and fit) | 2.9 s | 2.7 s |
+| Context aware (C decoder and fit) | 2.9 s | 2.7 s |
 | Huffman, fit in Java | 3.3 s | 3.0 s |
 | Huffman, fit in C | 2.2 s | 1.8 s |
 | Huffman, fit and Huffman decoding in C | 1.9 s | 1.7 s |
@@ -132,7 +138,7 @@ still decoding). On a machine with more cores, each channel's fit is also
 shared among several helper threads (PairBench shows the parts with one
 helper and with as many as the machine gets). On 16 cores (Windows,
 scrubjay, 1 band) that took the Huffman decoding from 664 to 461 ms,
-against the mixed context's 717; its encode is 391 ms against 942, and its
+against the context aware's 717; its encode is 391 ms against 942, and its
 decode check 106 against 398. The three channels' Huffman coding, one after another, went from 1.38 s
 in Java to 0.29 s in C, and their decoding from 0.65 s to 0.29 s.
 
@@ -152,15 +158,15 @@ channel's coding, each a serial loop: more bands is the way to go faster.
 
 | File | What it is |
 |---|---|
-| java/src/NativeWriter.java | the writer: SimpleWriter2 1.1 and HuffmanWriter in one, with the Delta (LS, Avg) and Entropy (Mixed context, Huffman) menus; the Huffman coding (huffmanCode, huffmanRead, huffmanDecode) and its native methods (stringListNative, packRegularCodeNative, huffmanDecodeNative, rebuildHuffmanChannelsNative) |
+| java/src/NativeWriter.java | the writer: SimpleWriter2 1.1 and HuffmanWriter in one, with the Delta (LS, Avg) and Entropy (Context aware, Huffman) menus; the Huffman coding (huffmanCode, huffmanRead, huffmanDecode) and its native methods (stringListNative, packRegularCodeNative, huffmanDecodeNative, rebuildHuffmanChannelsNative) |
 | java/src/NativeReader.java | the reader for all its formats (decodeMixed: streaming, each channel as its bytes arrive; decodeHuffman: read, then decoded and rebuilt a band at a time) |
 | java/src/NativePacketWriter.java, NativePacketReader.java | DeltaEncoder's PacketWriter and PacketReader (2.2; Packet format 'P'), with the segmentation, the reader's deltas and its last steps in C. The reader's native methods are the writer's (segmentNative, packSegmentsNative, restoreNative, restoreDeltasNative) |
-| java/src/DeltaMapper.java | the channels, the deltas of every type, the least-squares fit from the rows above (RowFit, RowWave), the mixed context coding (MixedModels): DeltaEncoder's DeltaMapper, whole, with the native methods' declarations and the Java they stand in for |
+| java/src/DeltaMapper.java | the channels, the deltas of every type, the least-squares fit from the rows above (RowFit, RowWave), the context aware coding (MixedModels): DeltaEncoder's DeltaMapper, whole, with the native methods' declarations and the Java they stand in for |
 | java/src/ArithmeticMapper.java | the arithmetic and range coders (RangeEncoder, RangeDecoder, Arriving): DeltaEncoder's ArithmeticMapper, whole, plus Arriving.awaitAll |
 | java/src/ResizeMapper.java, ViewerSupport.java | resizing (resize, resize2); the windows, dialogs and parallel helpers |
 | java/src/CodeMapper.java, StringMapper.java, SegmentMapper.java | DeltaEncoder's, whole: NativeWriter and NativeReader use CodeMapper's and StringMapper's Huffman coding, the Packet pair all three (the Java when the library isn't there) |
 | native/DeltaMapper.c, .h | DeltaMapper's methods in C, under the same names (so far RowFit: RowFit_init, _start, _moveTo, _addColumns, _solveRow, _solvePoints, _predict, _plane) |
-| native/DeltaMapper.c, .h (2) | ... and the mixed context coder: DeltaMapper_packMixedDeltas (MixedModels_init, _contexts, _contextsRow, _update, _encode), the same bytes as packMixedDeltas |
+| native/DeltaMapper.c, .h (2) | ... and the context aware coder: DeltaMapper_packMixedDeltas (MixedModels_init, _contexts, _contextsRow, _update, _encode), the same bytes as packMixedDeltas |
 | native/DeltaMapper.c, .h (3) | ... and the reader's decoding: DeltaMapper_decodeRowFitChannels (MixedModels_decode, _earlierRows; each channel's decoder and helper threads, as RowWave), the same deltas and values as getValuesFromRowFitChannels; DeltaMapper_decodeAverageChannels, the same for the average deltas (getValuesFromAverageChannels: each channel's decoder thread, with the average of left and above in place of the fit) |
 | native/DeltaMapper.c, .h (4) | ... and the reader's last steps: DeltaMapper_getPixels (getBlueGreenRed, ResizeMapper.resize2 or resize, and getPixel in one pass, on threads), the same image as the Java. resize's maps come from DeltaMapper.resizeMap, which runs ResizeMapper.resizeX and resizeY on a line of known values |
 | native/DeltaMapper.c, .h (5) | ... and the writer's Apply (DeltaMapper_applyQuantize, _applyPreview) and decode check (DeltaMapper_checkMixedDeltas) |
@@ -270,8 +276,8 @@ shared from java/launch:
 | RowFitBench | asks for an image; times RowFit's fit in Java and, if the library is built, in C through JNI (as NativeWriter runs it), and writes native/rowfit.dump |
 | bench_RowFit (Windows / Linux), bench_RowFit_native (...) | the C half: reads native/rowfit.dump, checks every prediction against the Java's, and times the same way |
 | DecoderBench | asks for an image; codes it as Save does, then times the reader's decoding (all three channels at once) in Java and in C through JNI, checking the deltas and values are the same |
-| PairBench | asks for an image; codes it as Save does with both codings (LS deltas), in 1 and 4 bands, and times each one's encode (with its decode check) and its decoding (best of 5), then the decoding's parts in 1 band: the mixed context decoder and fit, the Huffman decoding, and its fit rebuild |
-| ScaleBench | asks for an image; tiles it 2 x 2 and times each coding (mixed context and Huffman, LS and Avg deltas) in 1, 2, 4 ... 64 bands, encode and decode, with the file's size (see native/run_scale below) |
+| PairBench | asks for an image; codes it as Save does with both codings (LS deltas), in 1 and 4 bands, and times each one's encode (with its decode check) and its decoding (best of 5), then the decoding's parts in 1 band: the context aware decoder and fit, the Huffman decoding, and its fit rebuild |
+| ScaleBench | asks for an image; tiles it 2 x 2 and times each coding (context aware and Huffman, LS and Avg deltas) in 1, 2, 4 ... 64 bands, encode and decode, with the file's size (see native/run_scale below) |
 | CoderBench | asks for an image; makes its deltas as Save does, then times the mixed coder in Java (packMixedDeltasJava) and in C through JNI, checking the bytes are the same |
 
 The Java launches give the JVM `--enable-native-access=ALL-UNNAMED`, which
@@ -306,6 +312,13 @@ a program that keeps running would have it; a 2 x 2 scrubjay needs about 3 GB
 Java how many it has (-XX:ActiveProcessorCount), as it doesn't always see an
 affinity limit.
 
+On a rented machine: native/cloud_setup.sh, pasted as the machine's startup
+script ("user data" on AWS) when launching it from an Ubuntu image, installs
+a JDK, gcc and make, downloads NativeEncoder.zip and scrubjay.jpg from
+GitHub and runs run_scale (with a 16 GB heap). The results end up in
+/home/ubuntu/NativeEncoder/native, the log in /home/ubuntu/run_scale.log,
+and /home/ubuntu/DONE appears when it's finished.
+
 ## Test
 
 ```
@@ -313,7 +326,7 @@ java\run_tests.bat bluejay.jpg     # Windows
 java/run_tests.sh bluejay.jpg      # Linux (needs xvfb-run)
 ```
 
-It writes the image with NativeWriter (test.Drive): mixed context in 1, 4 and
+It writes the image with NativeWriter (test.Drive): context aware in 1, 4 and
 8 bands, in 1 band with the Java fit and coder (`-Dnative=false`) and in 4 bands
 with Avg deltas; Huffman in 1, 4 and 8 bands and in 4 bands with Avg deltas; and
 with NativePacketWriter at its defaults and
