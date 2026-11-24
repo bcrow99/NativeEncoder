@@ -10,15 +10,23 @@ The writer has two menus for how Save codes the image:
 
 - **Delta**: LS, the least-squares fit from the rows above (the default), or
   Avg, the classic average filter (each pixel from (left + above) / 2).
-- **Entropy**: Context aware (the default), the Simple 2 format ('F'), or
-  Huffman on the unary strings, the Huffman format ('H'); or Neighbour
-  Huffman on the deltas themselves, DeltaEncoder's HuffmanWriter2 coding:
-  Huffman tables chosen by each delta's neighbours, with a run mode and pairs
-  in the quiet parts, and a single delta's sign flipped where its
-  neighbours' is negative ('N' version 2, the same files as HuffmanWriter2;
-  version 1 files, without the flip, are still read; coded and
-  decoded in C with the library, NeighbourMapper.c, else in Java,
-  NeighbourMapper).
+- **Entropy**: Context aware (the default), the Simple 2 format ('F');
+  Context tables, the Context tables format ('T'): the context aware
+  coding's contexts with fixed tables in place of its adaptive models (the
+  deltas counted once by context, the counts written as tables, the deltas
+  rANS coded with them), a little bigger (about 1-3%) and about twice as
+  fast to decode (coded and decoded in C with the library, ContextTables.c,
+  else in Java, ContextTables); Huffman on the unary strings, the Huffman
+  format ('H'); or Huffman tables (neighbour Huffman) on the deltas
+  themselves, DeltaEncoder's HuffmanWriter2 coding:
+  Huffman tables chosen by each delta's neighbours and a second opinion (how
+  far the median edge detector is from the prediction, as the context aware
+  coding has it), with a run mode and pairs in the quiet parts, and a delta's
+  sign flipped where the opinion is negative ('N' version 3, the same files
+  as HuffmanWriter2; versions 2 and 1, without the opinions, are still read;
+  coded and decoded in C with the library, NeighbourMapper.c, else in Java,
+  NeighbourMapper). Version 3 decodes a pixel at a time as the channel is
+  rebuilt, since the opinions need the values.
 
 With LS, the files are exactly SimpleWriter2's (Simple 2 format 2) and
 HuffmanWriter's (Huffman format 3), so they go back and forth between the two
@@ -87,7 +95,7 @@ into the image, in one pass; and the LS writer refits the bands' first rows
 all at once. Together, on the Ryzen with 16 threads, Huffman Avg went from
 1.04 to 0.69 s (encode and decode) and Mixed Avg from 1.79 to 1.31 s. The
 Huffman reader also decodes and rebuilds each Avg band in one C step
-(NativeWriter.huffmanAverage; native version 16). Version 17 added the neighbour Huffman decoding in C (native/NeighbourMapper.c), version 18 its coding, version 19 the flipped signs (Neighbour Huffman version 2).
+(NativeWriter.huffmanAverage; native version 16). Version 17 added the neighbour Huffman decoding in C (native/NeighbourMapper.c), version 18 its coding, version 19 the flipped signs (Neighbour Huffman version 2), version 20 the second opinions (Neighbour Huffman version 3, decoded inside the rebuilding: DeltaMapper_decodeRowFitChannelsWith, NeighbourMapper_average), version 21 the Context tables (ContextTables.c; NeighbourMapper.c's bit streams and code lengths moved to LengthCoding.c, which both use).
 
 With the context aware coding the coder, which both share, is most of the
 time. Its C decoder was sped up (about 12% on one core: the earlier
@@ -159,12 +167,13 @@ channel's coding, each a serial loop: more bands is the way to go faster.
 | java/bench | | the Java halves of the benchmarks (RowFitBench, CoderBench, DecoderBench, PairBench, ScaleBench; the default package: they use DeltaMapper's package-private classes) |
 | java/run_tests.sh, .bat | | the regression test |
 | java/launch | | shared run configurations (they appear under Run and External Tools) |
-| native | NativeEncoder_C (C, CDT; on Linux, after native/eclipse-linux.sh) | the C versions (DeltaMapper.c, .h, ArithmeticMapper.c, .h, StringMapper.c, .h, CodeMapper.c, .h, SegmentMapper.c, .h, BlockPool.c, .h), their JNI side (DeltaMapper_jni.c), the C halves of the benchmarks (bench_RowFit.c), the Makefile |
+| native | NativeEncoder_C (C, CDT; on Linux, after native/eclipse-linux.sh) | the C versions (DeltaMapper.c, .h, ArithmeticMapper.c, .h, StringMapper.c, .h, CodeMapper.c, .h, SegmentMapper.c, .h, NeighbourMapper.c, .h, ContextTables.c, .h, LengthCoding.c, .h, BlockPool.c, .h), their JNI side (DeltaMapper_jni.c), the C halves of the benchmarks (bench_RowFit.c), the Makefile |
 
 | File | What it is |
 |---|---|
-| java/src/NativeWriter.java | the writer: SimpleWriter2 1.1 and HuffmanWriter in one, with the Delta (LS, Avg) and Entropy (Context aware, Huffman) menus; the Huffman coding (huffmanCode, huffmanRead, huffmanDecode) and its native methods (stringListNative, packRegularCodeNative, huffmanDecodeNative, rebuildHuffmanChannelsNative) |
-| java/src/NativeReader.java | the reader for all its formats (decodeMixed: streaming, each channel as its bytes arrive; decodeHuffman: read, then decoded and rebuilt a band at a time) |
+| java/src/NativeWriter.java | the writer: SimpleWriter2 1.1 and HuffmanWriter in one, with the Delta (LS, Avg) and Entropy (Context aware, Context tables, Huffman, Huffman tables) menus; the Huffman coding (huffmanCode, huffmanRead, huffmanDecode) and its native methods (stringListNative, packRegularCodeNative, huffmanDecodeNative, rebuildHuffmanChannelsNative) |
+| java/src/NativeReader.java | the reader for all its formats (decodeMixed: streaming, each channel as its bytes arrive; decodeHuffman, decodeTables, decodeAlone: read, then decoded and rebuilt a band at a time) |
+| java/src/ContextTables.java, NeighbourMapper.java | DeltaEncoder's, whole: the Context tables coding and the neighbour Huffman coding (the Java when the library isn't there) |
 | java/src/NativePacketWriter.java, NativePacketReader.java | DeltaEncoder's PacketWriter and PacketReader (2.2; Packet format 'P'), with the segmentation, the reader's deltas and its last steps in C. The reader's native methods are the writer's (segmentNative, packSegmentsNative, restoreNative, restoreDeltasNative) |
 | java/src/DeltaMapper.java | the channels, the deltas of every type, the least-squares fit from the rows above (RowFit, RowWave), the context aware coding (MixedModels): DeltaEncoder's DeltaMapper, whole, with the native methods' declarations and the Java they stand in for |
 | java/src/ArithmeticMapper.java | the arithmetic and range coders (RangeEncoder, RangeDecoder, Arriving): DeltaEncoder's ArithmeticMapper, whole, plus Arriving.awaitAll |
@@ -180,6 +189,9 @@ channel's coding, each a serial loop: more bands is the way to go faster.
 | native/SegmentMapper.c, .h | SegmentMapper's segmentation in C for the Packet pair: SegmentMapper_getSegmentedData3 (segment, merge3 with its compressing on threads, combine3), _packSegments3, and _restore (unpackSegments3 and restore2, decompressing on threads): the same segments, bytes and strings |
 | native/CodeMapper.c, .h | CodeMapper's canonical Huffman code in C: CodeMapper_packRegularCode, _unpackRegularCode (the code lengths come from the Java's getRegularHuffmanLength) |
 | native/ArithmeticMapper.c, .h | ArithmeticMapper's range coder in C (RangeEncoder_init, _encode, _finish; RangeDecoder_init, _target, _decode) |
+| native/NeighbourMapper.c, .h | NeighbourMapper's neighbour Huffman coding in C: NeighbourMapper_code, _decode (versions 1 and 2), NeighbourDecoder (version 3, a pixel at a time), NeighbourMapper_average, _decodeKnown: the same bytes and deltas |
+| native/ContextTables.c, .h | ContextTables' Context tables coding in C: ContextTables_code (its contexts from DeltaMapper_contextRows), ContextTables_decoder and TablesDecoder_next (which DeltaMapper_decodeTablesRowFitChannels and _decodeTablesAverageChannels call at each pixel, after its model's context alone), ContextTables_check: the same bytes and deltas |
+| native/LengthCoding.c, .h | the bit streams, canonical Huffman tables and compact code lengths (NeighbourMapper's BitReader, BitWriter, Table, writeLengthSymbols and readLengthSymbols) that NeighbourMapper.c and ContextTables.c share |
 | native/BlockPool.c, .h | the library's memory, kept for reuse: every C file includes BlockPool.h last, which makes its malloc, calloc, realloc and free the pool's; freed blocks of 1 MB or more are kept (up to a quarter of the memory, at most 2 GB) and handed out again, so a program that keeps running doesn't get fresh memory, page by page from the system, for every frame |
 | native/DeltaMapper_jni.c | the native methods DeltaMapper.java declares (rowFitPlane, packMixedDeltasNative, decodeRowFitChannelsNative, decodeAverageChannelsNative, getPixelsNative, applyQuantizeNative, applyPreviewNative, checkMixedDeltasNative, rebuildRowFitChannelsNative), NativeWriter declares (stringListNative, packRegularCodeNative, huffmanDecodeNative, rebuildHuffmanChannelsNative) and NativePacketWriter declares (segmentNative, packSegmentsNative, restoreNative, restoreDeltasNative), built with DeltaMapper.c, ArithmeticMapper.c, StringMapper.c, CodeMapper.c, SegmentMapper.c and BlockPool.c into the library DeltaMapper |
 
