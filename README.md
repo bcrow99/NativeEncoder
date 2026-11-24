@@ -14,7 +14,9 @@ The writer has two menus for how Save codes the image:
   Huffman on the unary strings, the Huffman format ('H'); or Neighbour
   Huffman on the deltas themselves, DeltaEncoder's HuffmanWriter2 coding:
   Huffman tables chosen by each delta's neighbours, with a run mode and pairs
-  in the quiet parts ('N', the same files as HuffmanWriter2; coded and
+  in the quiet parts, and a single delta's sign flipped where its
+  neighbours' is negative ('N' version 2, the same files as HuffmanWriter2;
+  version 1 files, without the flip, are still read; coded and
   decoded in C with the library, NeighbourMapper.c, else in Java,
   NeighbourMapper).
 
@@ -85,7 +87,7 @@ into the image, in one pass; and the LS writer refits the bands' first rows
 all at once. Together, on the Ryzen with 16 threads, Huffman Avg went from
 1.04 to 0.69 s (encode and decode) and Mixed Avg from 1.79 to 1.31 s. The
 Huffman reader also decodes and rebuilds each Avg band in one C step
-(NativeWriter.huffmanAverage; native version 16). Version 17 added the neighbour Huffman decoding in C (native/NeighbourMapper.c), version 18 its coding.
+(NativeWriter.huffmanAverage; native version 16). Version 17 added the neighbour Huffman decoding in C (native/NeighbourMapper.c), version 18 its coding, version 19 the flipped signs (Neighbour Huffman version 2).
 
 With the context aware coding the coder, which both share, is most of the
 time. Its C decoder was sped up (about 12% on one core: the earlier
