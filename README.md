@@ -11,11 +11,14 @@ The writer has two menus for how Save codes the image:
 - **Delta**: LS, the least-squares fit from the rows above (the default), or
   Avg, the classic average filter (each pixel from (left + above) / 2).
 - **Entropy**: Context aware (the default), the Simple 2 format ('F');
-  Context tables, the Context tables format ('T'): the context aware
-  coding's contexts with fixed tables in place of its adaptive models (the
+  Context tables, the Context tables format ('T') 2: fixed tables chosen by
+  each delta's own context (its neighbours' activity and its second
+  opinion) in place of the context aware coding's adaptive models (the
   deltas counted once by context, the counts written as tables, the deltas
-  rANS coded with them), a little bigger (about 1-3%) and about twice as
-  fast to decode (coded and decoded in C with the library, ContextTables.c,
+  rANS coded with them; no other channel used, so all the channels decode
+  at the same time), a little bigger (about 1-8%) and about three times as
+  fast to decode (version 1, with the context aware coding's contexts, is
+  read too) (coded and decoded in C with the library, ContextTables.c,
   else in Java, ContextTables); Huffman on the unary strings, the Huffman
   format ('H'); or Huffman tables (neighbour Huffman) on the deltas
   themselves, DeltaEncoder's HuffmanWriter2 coding:
@@ -95,7 +98,7 @@ into the image, in one pass; and the LS writer refits the bands' first rows
 all at once. Together, on the Ryzen with 16 threads, Huffman Avg went from
 1.04 to 0.69 s (encode and decode) and Mixed Avg from 1.79 to 1.31 s. The
 Huffman reader also decodes and rebuilds each Avg band in one C step
-(NativeWriter.huffmanAverage; native version 16). Version 17 added the neighbour Huffman decoding in C (native/NeighbourMapper.c), version 18 its coding, version 19 the flipped signs (Neighbour Huffman version 2), version 20 the second opinions (Neighbour Huffman version 3, decoded inside the rebuilding: DeltaMapper_decodeRowFitChannelsWith, NeighbourMapper_average), version 21 the Context tables (ContextTables.c; NeighbourMapper.c's bit streams and code lengths moved to LengthCoding.c, which both use).
+(NativeWriter.huffmanAverage; native version 16). Version 17 added the neighbour Huffman decoding in C (native/NeighbourMapper.c), version 18 its coding, version 19 the flipped signs (Neighbour Huffman version 2), version 20 the second opinions (Neighbour Huffman version 3, decoded inside the rebuilding: DeltaMapper_decodeRowFitChannelsWith, NeighbourMapper_average), version 21 the Context tables (ContextTables.c; NeighbourMapper.c's bit streams and code lengths moved to LengthCoding.c, which both use), version 22 Context tables version 2 (each channel's own contexts: ContextTables_pixel, ContextTables_average).
 
 With the context aware coding the coder, which both share, is most of the
 time. Its C decoder was sped up (about 12% on one core: the earlier
@@ -190,7 +193,7 @@ channel's coding, each a serial loop: more bands is the way to go faster.
 | native/CodeMapper.c, .h | CodeMapper's canonical Huffman code in C: CodeMapper_packRegularCode, _unpackRegularCode (the code lengths come from the Java's getRegularHuffmanLength) |
 | native/ArithmeticMapper.c, .h | ArithmeticMapper's range coder in C (RangeEncoder_init, _encode, _finish; RangeDecoder_init, _target, _decode) |
 | native/NeighbourMapper.c, .h | NeighbourMapper's neighbour Huffman coding in C: NeighbourMapper_code, _decode (versions 1 and 2), NeighbourDecoder (version 3, a pixel at a time), NeighbourMapper_average, _decodeKnown: the same bytes and deltas |
-| native/ContextTables.c, .h | ContextTables' Context tables coding in C: ContextTables_code (its contexts from DeltaMapper_contextRows), ContextTables_decoder and TablesDecoder_next (which DeltaMapper_decodeTablesRowFitChannels and _decodeTablesAverageChannels call at each pixel, after its model's context alone), ContextTables_check: the same bytes and deltas |
+| native/ContextTables.c, .h | ContextTables' Context tables coding in C: ContextTables_code (each pixel's own context, ContextTables_ownContext), ContextTables_decoder, ContextTables_pixel (with DeltaMapper_decodeRowFitChannelsWith) and ContextTables_average, ContextTables_check: the same bytes and deltas; version 1's tables decoded by TablesDecoder_next, which DeltaMapper_decodeTablesRowFitChannels and _decodeTablesAverageChannels call at each pixel, after its model's context alone |
 | native/LengthCoding.c, .h | the bit streams, canonical Huffman tables and compact code lengths (NeighbourMapper's BitReader, BitWriter, Table, writeLengthSymbols and readLengthSymbols) that NeighbourMapper.c and ContextTables.c share |
 | native/BlockPool.c, .h | the library's memory, kept for reuse: every C file includes BlockPool.h last, which makes its malloc, calloc, realloc and free the pool's; freed blocks of 1 MB or more are kept (up to a quarter of the memory, at most 2 GB) and handed out again, so a program that keeps running doesn't get fresh memory, page by page from the system, for every frame |
 | native/DeltaMapper_jni.c | the native methods DeltaMapper.java declares (rowFitPlane, packMixedDeltasNative, decodeRowFitChannelsNative, decodeAverageChannelsNative, getPixelsNative, applyQuantizeNative, applyPreviewNative, checkMixedDeltasNative, rebuildRowFitChannelsNative), NativeWriter declares (stringListNative, packRegularCodeNative, huffmanDecodeNative, rebuildHuffmanChannelsNative) and NativePacketWriter declares (segmentNative, packSegmentsNative, restoreNative, restoreDeltasNative), built with DeltaMapper.c, ArithmeticMapper.c, StringMapper.c, CodeMapper.c, SegmentMapper.c and BlockPool.c into the library DeltaMapper |
