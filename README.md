@@ -170,6 +170,7 @@ channel's coding, each a serial loop: more bands is the way to go faster.
 | java/bench | | the Java halves of the benchmarks (RowFitBench, CoderBench, DecoderBench, PairBench, ScaleBench; the default package: they use DeltaMapper's package-private classes) |
 | java/run_tests.sh, .bat | | the regression test |
 | java/launch | | shared run configurations (they appear under Run and External Tools) |
+| gpu | | an experiment: the encoder's least-squares fit on the GPU (OpenCL), compared with the C (see GPU below) |
 | native | NativeEncoder_C (C, CDT; on Linux, after native/eclipse-linux.sh) | the C versions (DeltaMapper.c, .h, ArithmeticMapper.c, .h, StringMapper.c, .h, CodeMapper.c, .h, SegmentMapper.c, .h, NeighbourMapper.c, .h, ContextTables.c, .h, LengthCoding.c, .h, BlockPool.c, .h), their JNI side (DeltaMapper_jni.c), the C halves of the benchmarks (bench_RowFit.c), the Makefile |
 
 | File | What it is |
@@ -297,7 +298,7 @@ shared from java/launch:
 | bench_RowFit (Windows / Linux), bench_RowFit_native (...) | the C half: reads native/rowfit.dump, checks every prediction against the Java's, and times the same way |
 | DecoderBench | asks for an image; codes it as Save does, then times the reader's decoding (all three channels at once) in Java and in C through JNI, checking the deltas and values are the same |
 | PairBench | asks for an image; codes it as Save does with both codings (LS deltas), in 1 and 4 bands, and times each one's encode (with its decode check) and its decoding (best of 5), then the decoding's parts in 1 band: the context aware decoder and fit, the Huffman decoding, and its fit rebuild |
-| ScaleBench | asks for an image; tiles it 2 x 2 and times each coding (context aware and Huffman, LS and Avg deltas) in 1, 2, 4 ... 64 bands, encode and decode, with the file's size (see native/run_scale below) |
+| ScaleBench | asks for an image; tiles it 2 x 2 and times each coding (context aware, Context tables, Huffman and Huffman tables, LS and Avg deltas) in 1, 2, 4 ... 64 bands, encode and decode, with the file's size (see native/run_scale below) |
 | CoderBench | asks for an image; makes its deltas as Save does, then times the mixed coder in Java (packMixedDeltasJava) and in C through JNI, checking the bytes are the same |
 
 The Java launches give the JVM `--enable-native-access=ALL-UNNAMED`, which
@@ -315,8 +316,9 @@ command if it isn't set.
 How the speed grows with cores: `native\run_scale.bat image` (or
 `native/run_scale.sh image`) builds the C and runs ScaleBench. It tiles the
 image 2 x 2 (mirrored copies; scrubjay.jpg at Save's Pixel Resolution 4 is
-then coded 5630 x 4316, enough for 64 bands) and times each coding (mixed
-context and Huffman, LS and Avg deltas) in 1, 2, 4 ... 64 bands: encode
+then coded 5630 x 4316, enough for 64 bands) and times each coding (context
+aware, Context tables, Huffman and Huffman tables, LS and Avg deltas) in 1,
+2, 4 ... 64 bands: encode
 (without its decode check), decode, and the file's size. It runs once on all
 the logical processors and, on a machine with two a core, again on one a
 core (taskset on Linux, start /affinity on Windows), then on one processor
@@ -324,7 +326,9 @@ in 1 and 4 bands (the single-core times). The writer and reader make their
 threads for the processors Java sees, which each section shows. It first
 records the processor, cores, threads, clock and memory, and writes it all
 to native/scale_results_<machine>.txt. Optional arguments: the tiling, Pixel
-Resolution, Color Resolution and timed runs (default 2 4 3 2). The Java heap
+Resolution, Color Resolution and timed runs (default 2 4 3 2); run directly,
+ScaleBench also takes the band counts (all, or a list such as 1,4) and the
+codings (a list such as A,T; all four if not given). The Java heap
 is half the memory, taken and touched at the start (-Xms, AlwaysPreTouch), as
 a program that keeps running would have it; a 2 x 2 scrubjay needs about 3 GB
 (tile 1 if there's less). Other Java options can be given in JAVA_OPTS (e.g.
@@ -338,6 +342,34 @@ a JDK, gcc and make, downloads NativeEncoder.zip and scrubjay.jpg from
 GitHub and runs run_scale (with a 16 GB heap). The results end up in
 /home/ubuntu/NativeEncoder/native, the log in /home/ubuntu/run_scale.log,
 and /home/ubuntu/DONE appears when it's finished.
+
+## GPU: an experiment
+
+gpu/ holds a first try at the GPU as a helper: the encoder's least-squares
+fit (RowFit_plane: a fit at every 4th pixel of each row from the rows above,
+and each pixel's prediction from it), the one part of the coding that's
+thousands of independent calculations. gpu_fit runs it on the GPU through
+OpenCL (gpu/rowfit.cl, in OpenCL C: C99 for one pixel or point, run for all
+of them at once) and on the CPU (the library's C, all its threads), times
+both, and compares the predictions value by value: the GPU's must be the
+C's, bit for bit, or the files would differ. It does the C's double
+operations in the C's order, with no fused multiply-adds, so they should be;
+a device without doubles (Apple's GPUs, Intel's Xe laptop graphics) can't
+run it. On the CPU's own OpenCL (pocl) the predictions are the same as the
+C's for bluejay and finch, with several radii and spacings.
+
+```
+cd gpu
+make                                   # needs OpenCL's headers only (see the Makefile)
+java ToPPM.java ../../finch.jpg finch.ppm
+gpu_fit finch.ppm                      # [radius every rows device]: default 10 4 64 0
+```
+
+It lists the OpenCL devices (GPUs first; device picks one), then for green
+(7 unknowns) and blue - green after green (10) prints the CPU's and the
+GPU's times and whether the predictions are the same. OpenCL comes with the
+graphics driver (OpenCL.dll on Windows); the program loads it when it runs,
+so nothing is linked.
 
 ## Test
 
